@@ -8,7 +8,7 @@ import (
 )
 
 var (
-	version = "1.0.0"
+	version = "dev"
 )
 
 // rootCmd represents the base command
