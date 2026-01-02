@@ -39,3 +39,5 @@ test_videos/
 *.flv
 
 converted/**/*
+Archive.zip
+demo.tape

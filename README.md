@@ -12,6 +12,10 @@ A fast and efficient command-line tool for converting video files between differ
 - **Concurrent Processing**: Multi-threaded batch conversions for faster processing
 - **Simple CLI**: Easy-to-use command-line interface
 
+## Demo
+
+![convert-vid demo](demo.gif)
+
 ## Prerequisites
 
 **FFmpeg** must be installed on your system:
