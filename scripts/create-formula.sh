@@ -63,7 +63,7 @@ class ConvertVid < Formula
       sha256 "$SHA_DARWIN_ARM64"
 
       def install
-        bin.install "convert-vid"
+        bin.install "convert-video-formats" => "convert-vid"
       end
     end
     if Hardware::CPU.intel?
@@ -71,7 +71,7 @@ class ConvertVid < Formula
       sha256 "$SHA_DARWIN_AMD64"
 
       def install
-        bin.install "convert-vid"
+        bin.install "convert-video-formats" => "convert-vid"
       end
     end
   end
@@ -82,7 +82,7 @@ class ConvertVid < Formula
       sha256 "$SHA_LINUX_ARM64"
 
       def install
-        bin.install "convert-vid"
+        bin.install "convert-video-formats" => "convert-vid"
       end
     end
     if Hardware::CPU.intel?
@@ -90,7 +90,7 @@ class ConvertVid < Formula
       sha256 "$SHA_LINUX_AMD64"
 
       def install
-        bin.install "convert-vid"
+        bin.install "convert-video-formats" => "convert-vid"
       end
     end
   end
