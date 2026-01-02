@@ -13,9 +13,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/user/convert-vid-format/internal/progress"
-	"github.com/user/convert-vid-format/internal/utils"
-	"github.com/user/convert-vid-format/pkg/types"
+	"github.com/vib795/convert-video-formats/internal/progress"
+	"github.com/vib795/convert-video-formats/internal/utils"
+	"github.com/vib795/convert-video-formats/pkg/types"
 )
 
 // Converter handles video conversion operations

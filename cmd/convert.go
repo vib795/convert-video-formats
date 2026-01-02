@@ -6,9 +6,9 @@ import (
 	"runtime"
 
 	"github.com/spf13/cobra"
-	"github.com/user/convert-vid-format/internal/converter"
-	"github.com/user/convert-vid-format/internal/utils"
-	"github.com/user/convert-vid-format/pkg/types"
+	"github.com/vib795/convert-video-formats/internal/converter"
+	"github.com/vib795/convert-video-formats/internal/utils"
+	"github.com/vib795/convert-video-formats/pkg/types"
 )
 
 var (

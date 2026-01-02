@@ -44,8 +44,8 @@ ffmpeg -version
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/user/convert-vid-format.git
-cd convert-vid-format
+git clone https://github.com/vib795/convert-video-formats.git
+cd convert-video-formats
 ```
 
 2. Build the binary:
@@ -65,7 +65,7 @@ export PATH=$PATH:$(pwd)
 ### Using Go Install
 
 ```bash
-go install github.com/user/convert-vid-format@latest
+go install github.com/vib795/convert-video-formats@latest
 ```
 
 ## Usage

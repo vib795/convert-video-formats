@@ -1,4 +1,4 @@
-module github.com/user/convert-vid-format
+module github.com/vib795/convert-video-formats
 
 go 1.24.7
 
