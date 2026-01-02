@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/user/convert-vid-format/pkg/types"
+	"github.com/vib795/convert-video-formats/pkg/types"
 )
 
 // ExpandPath expands ~ to home directory and cleans the path
