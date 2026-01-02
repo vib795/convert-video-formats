@@ -8,7 +8,7 @@ import (
 )
 
 var (
-	version = "dev"
+	Version = "dev"
 )
 
 // rootCmd represents the base command
@@ -47,6 +47,6 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Print the version number",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("convert-vid v%s\n", version)
+		fmt.Printf("convert-vid v%s\n", Version)
 	},
 }

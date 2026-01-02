@@ -18,7 +18,7 @@ builds:
     binary: convert-vid
     ldflags:
       - -s -w
-      - -X github.com/vib795/convert-vid-format/cmd.version={{.Version}}
+      - -X github.com/vib795/convert-vid-format/cmd.Version={{.Version}}
 
 archives:
   - format: tar.gz
