@@ -2,10 +2,87 @@ package progress
 
 import (
 	"fmt"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
+
+// Global state for cleanup
+var (
+	cleanupMu       sync.Mutex
+	activeSpinner   *Spinner
+	activeBar       *ProgressBar
+	activeBatch     *BatchProgress
+	signalRegistered bool
+)
+
+// RegisterCleanupHandler sets up signal handling for graceful terminal cleanup
+func RegisterCleanupHandler() {
+	cleanupMu.Lock()
+	defer cleanupMu.Unlock()
+
+	if signalRegistered {
+		return
+	}
+	signalRegistered = true
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		CleanupTerminal()
+		os.Exit(130) // Standard exit code for SIGINT
+	}()
+}
+
+// CleanupTerminal cleans up any active progress displays and resets terminal
+func CleanupTerminal() {
+	cleanupMu.Lock()
+	defer cleanupMu.Unlock()
+
+	// Stop any active progress indicators
+	if activeSpinner != nil {
+		activeSpinner.Stop()
+		activeSpinner = nil
+	}
+	if activeBar != nil {
+		activeBar.Stop()
+		activeBar = nil
+	}
+	if activeBatch != nil {
+		activeBatch.clearDisplay()
+		activeBatch = nil
+	}
+
+	// Reset terminal state
+	fmt.Print("\r\033[K")     // Clear current line
+	fmt.Print("\033[?25h")    // Ensure cursor is visible
+}
+
+// setActiveSpinner registers a spinner for cleanup
+func setActiveSpinner(s *Spinner) {
+	cleanupMu.Lock()
+	defer cleanupMu.Unlock()
+	activeSpinner = s
+}
+
+// setActiveBar registers a progress bar for cleanup
+func setActiveBar(b *ProgressBar) {
+	cleanupMu.Lock()
+	defer cleanupMu.Unlock()
+	activeBar = b
+}
+
+// setActiveBatch registers a batch progress for cleanup
+func setActiveBatch(bp *BatchProgress) {
+	cleanupMu.Lock()
+	defer cleanupMu.Unlock()
+	activeBatch = bp
+}
 
 // Spinner provides visual feedback during conversion
 type Spinner struct {
@@ -37,6 +114,9 @@ func (s *Spinner) Start() {
 	}
 	s.active = true
 	s.mu.Unlock()
+
+	// Register for cleanup on interrupt
+	setActiveSpinner(s)
 
 	go func() {
 		i := 0
@@ -120,7 +200,7 @@ func NewProgressBar(message string) *ProgressBar {
 	}
 }
 
-// Start begins the progress bar
+// Start begins the progress bar and shows initial state
 func (p *ProgressBar) Start() {
 	p.mu.Lock()
 	if p.active {
@@ -129,6 +209,23 @@ func (p *ProgressBar) Start() {
 	}
 	p.active = true
 	p.mu.Unlock()
+
+	// Register for cleanup on interrupt
+	setActiveBar(p)
+
+	// Show initial state (0% progress)
+	p.showInitial()
+}
+
+// showInitial displays the initial progress bar state
+func (p *ProgressBar) showInitial() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	bar := strings.Repeat("░", p.width)
+	line := fmt.Sprintf("\r%s [%s] 0.0%% (00:00/--:--)", p.message, bar)
+	fmt.Print(line)
+	p.lastLine = line
 }
 
 // Update updates the progress bar with current progress
@@ -268,6 +365,8 @@ func NewBatchProgress(total int) *BatchProgress {
 
 // Start begins the batch progress display
 func (bp *BatchProgress) Start() {
+	// Register for cleanup on interrupt
+	setActiveBatch(bp)
 	go bp.displayLoop()
 }
 

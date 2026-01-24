@@ -106,7 +106,11 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 	// Wait for completion
 	if err := cmd.Wait(); err != nil {
 		bar.Error(fmt.Sprintf("Failed to convert %s", filepath.Base(inputPath)))
-		return fmt.Errorf("ffmpeg conversion failed: %w", err)
+		// Check if output file exists and provide helpful message
+		if utils.FileExists(outputPath) && !c.options.Overwrite {
+			return fmt.Errorf("conversion failed: output file already exists. Use --overwrite to replace it")
+		}
+		return fmt.Errorf("ffmpeg conversion failed: %w. Ensure ffmpeg is properly installed and the input file is valid", err)
 	}
 
 	bar.Success(fmt.Sprintf("Converted %s → %s", filepath.Base(inputPath), filepath.Base(outputPath)))
@@ -123,7 +127,11 @@ func (c *Converter) convertWithSpinner(inputPath, outputPath string) error {
 
 	if err := cmd.Run(); err != nil {
 		spinner.Error(fmt.Sprintf("Failed to convert %s", filepath.Base(inputPath)))
-		return fmt.Errorf("ffmpeg conversion failed: %w", err)
+		// Check if output file exists and provide helpful message
+		if utils.FileExists(outputPath) && !c.options.Overwrite {
+			return fmt.Errorf("conversion failed: output file already exists. Use --overwrite to replace it")
+		}
+		return fmt.Errorf("ffmpeg conversion failed: %w. Ensure ffmpeg is properly installed and the input file is valid", err)
 	}
 
 	spinner.Success(fmt.Sprintf("Converted %s → %s", filepath.Base(inputPath), filepath.Base(outputPath)))
