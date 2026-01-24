@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/vib795/convert-video-formats/internal/converter"
+	"github.com/vib795/convert-video-formats/internal/progress"
 	"github.com/vib795/convert-video-formats/internal/utils"
 	"github.com/vib795/convert-video-formats/pkg/types"
 )
@@ -64,6 +65,9 @@ func init() {
 }
 
 func runConvert(cmd *cobra.Command, args []string) error {
+	// Register signal handler for graceful terminal cleanup
+	progress.RegisterCleanupHandler()
+
 	// Determine input path from either flag or positional argument
 	var input string
 	if inputPath != "" {
