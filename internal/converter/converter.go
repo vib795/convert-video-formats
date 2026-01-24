@@ -479,17 +479,41 @@ func (c *Converter) buildFFmpegArgs(inputPath, outputPath string) []string {
 		"-stats",              // Show statistics
 	}
 
-	// Add quality settings
-	switch strings.ToLower(c.options.Quality) {
-	case "high":
-		args = append(args, "-crf", "18", "-preset", "slow")
-	case "medium":
-		args = append(args, "-crf", "23", "-preset", "medium")
-	case "low":
-		args = append(args, "-crf", "28", "-preset", "fast")
-	default:
-		// Default to medium quality
-		args = append(args, "-crf", "23", "-preset", "medium")
+	// Determine output format and set appropriate codecs
+	format := strings.ToLower(c.options.Format)
+
+	if format == "webm" {
+		// WebM uses VP9 for video and Opus for audio
+		args = append(args, "-c:v", "libvpx-vp9")
+		args = append(args, "-c:a", "libopus")
+
+		// Quality settings for VP9 (uses -b:v and -crf differently)
+		switch strings.ToLower(c.options.Quality) {
+		case "high":
+			args = append(args, "-crf", "15", "-b:v", "0")
+		case "medium":
+			args = append(args, "-crf", "30", "-b:v", "0")
+		case "low":
+			args = append(args, "-crf", "40", "-b:v", "0")
+		default:
+			args = append(args, "-crf", "30", "-b:v", "0")
+		}
+	} else {
+		// For mp4, mov, avi, mkv, flv - use H.264 for video and AAC for audio
+		args = append(args, "-c:v", "libx264")
+		args = append(args, "-c:a", "aac")
+
+		// Quality settings for x264
+		switch strings.ToLower(c.options.Quality) {
+		case "high":
+			args = append(args, "-crf", "18", "-preset", "slow")
+		case "medium":
+			args = append(args, "-crf", "23", "-preset", "medium")
+		case "low":
+			args = append(args, "-crf", "28", "-preset", "fast")
+		default:
+			args = append(args, "-crf", "23", "-preset", "medium")
+		}
 	}
 
 	// Add overwrite flag
