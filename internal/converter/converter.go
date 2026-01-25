@@ -519,8 +519,9 @@ func (c *Converter) convertFileWorkerSimple(inputPath, outputPath, baseName stri
 // buildFFmpegArgs builds the ffmpeg command arguments based on options
 func (c *Converter) buildFFmpegArgs(inputPath, outputPath string) []string {
 	args := []string{
-		"-nostdin",        // Don't wait for stdin input
+		"-nostdin",           // Don't wait for stdin input
 		"-i", inputPath,
+		"-stats",             // Show encoding stats
 		"-stats_period", "1", // Output stats every 1 second
 	}
 
