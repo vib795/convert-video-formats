@@ -422,26 +422,21 @@ func (c *Converter) parseProgress(stderr io.ReadCloser, bar *progress.ProgressBa
 	defer stderr.Close()
 
 	// Use a custom split function that splits on \r or \n
-	// FFmpeg uses \r to update progress on the same line
 	scanner := bufio.NewScanner(stderr)
 	scanner.Split(splitOnCarriageReturnOrNewline)
-	// Match "time=" from ffmpeg stats output (e.g., time=00:01:23.45)
-	timeRegex := regexp.MustCompile(`time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)`)
+	// Match "out_time=" from ffmpeg -progress output (e.g., out_time=00:01:23.456789)
+	timeRegex := regexp.MustCompile(`out_time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)`)
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Look for time= or out_time= in the output
 		matches := timeRegex.FindStringSubmatch(line)
 		if len(matches) == 4 {
-			// Parse HH:MM:SS.ss format
 			hours, _ := strconv.ParseFloat(matches[1], 64)
 			minutes, _ := strconv.ParseFloat(matches[2], 64)
 			seconds, _ := strconv.ParseFloat(matches[3], 64)
 
 			currentTime := hours*3600 + minutes*60 + seconds
-
-			// Update progress bar
 			bar.Update(currentTime, totalDuration)
 		}
 	}
@@ -521,8 +516,7 @@ func (c *Converter) buildFFmpegArgs(inputPath, outputPath string) []string {
 	args := []string{
 		"-nostdin",           // Don't wait for stdin input
 		"-i", inputPath,
-		"-stats",             // Show encoding stats
-		"-stats_period", "1", // Output stats every 1 second
+		"-progress", "pipe:2", // Output machine-readable progress to stderr
 	}
 
 	// Determine output format and set appropriate codecs
