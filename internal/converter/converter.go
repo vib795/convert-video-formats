@@ -77,6 +77,9 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 		return c.convertWithSpinner(inputPath, outputPath)
 	}
 
+	// Get input file size for progress display
+	inputSize := c.getFileSize(inputPath)
+
 	// Start progress bar
 	bar := progress.NewProgressBar(fmt.Sprintf("Converting %s", filepath.Base(inputPath)))
 	bar.Start()
@@ -91,9 +94,9 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
-	// Monitor output file duration in background
+	// Monitor output file size in background
 	stopProgress := make(chan bool)
-	go c.monitorOutputProgress(outputPath, bar, duration, stopProgress)
+	go c.monitorOutputProgress(outputPath, bar, duration, inputSize, stopProgress)
 
 	// Wait for completion
 	if err := cmd.Wait(); err != nil {
@@ -263,6 +266,9 @@ func (c *Converter) convertFileWorkerWithBatchProgress(inputPath, outputDir stri
 		return result
 	}
 
+	// Get input file size for progress display
+	inputSize := c.getFileSize(inputPath)
+
 	// Build ffmpeg command
 	args := c.buildFFmpegArgs(inputPath, outputPath)
 	cmd := exec.Command("ffmpeg", args...)
@@ -274,9 +280,9 @@ func (c *Converter) convertFileWorkerWithBatchProgress(inputPath, outputDir stri
 		return result
 	}
 
-	// Monitor output file duration for progress
+	// Monitor output file size for progress
 	stopProgress := make(chan bool)
-	go c.monitorBatchProgress(outputPath, batchProgress, baseName, duration, stopProgress)
+	go c.monitorBatchProgress(outputPath, batchProgress, baseName, duration, inputSize, stopProgress)
 
 	// Wait for completion
 	if err := cmd.Wait(); err != nil {
@@ -320,6 +326,9 @@ func (c *Converter) convertFileWorker(inputPath, outputDir string) types.Convers
 		return c.convertFileWorkerWithSpinner(inputPath, outputPath, baseName)
 	}
 
+	// Get input file size for progress display
+	inputSize := c.getFileSize(inputPath)
+
 	// Start progress bar
 	bar := progress.NewProgressBar(fmt.Sprintf("Converting %s", baseName))
 	bar.Start()
@@ -335,9 +344,9 @@ func (c *Converter) convertFileWorker(inputPath, outputDir string) types.Convers
 		return result
 	}
 
-	// Monitor output file duration for progress
+	// Monitor output file size for progress
 	stopProgress := make(chan bool)
-	go c.monitorOutputProgress(outputPath, bar, duration, stopProgress)
+	go c.monitorOutputProgress(outputPath, bar, duration, inputSize, stopProgress)
 
 	// Wait for completion
 	if err := cmd.Wait(); err != nil {
@@ -402,7 +411,7 @@ func (c *Converter) getVideoDuration(inputPath string) (float64, error) {
 }
 
 // monitorBatchProgress monitors output file size for batch progress tracking
-func (c *Converter) monitorBatchProgress(outputPath string, batchProgress *progress.BatchProgress, filename string, totalDuration float64, stop chan bool) {
+func (c *Converter) monitorBatchProgress(outputPath string, batchProgress *progress.BatchProgress, filename string, totalDuration float64, inputSize int64, stop chan bool) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -415,7 +424,7 @@ func (c *Converter) monitorBatchProgress(outputPath string, batchProgress *progr
 		case <-ticker.C:
 			elapsed := time.Since(startTime)
 			fileSize := c.getFileSize(outputPath)
-			batchProgress.UpdateFileWithSize(filename, elapsed, fileSize, totalDuration)
+			batchProgress.UpdateFileWithSize(filename, elapsed, fileSize, inputSize, totalDuration)
 		}
 	}
 }
@@ -501,7 +510,7 @@ func (c *Converter) buildFFmpegArgs(inputPath, outputPath string) []string {
 
 // monitorOutputProgress monitors conversion by showing elapsed time and file size
 // This is reliable because file size can always be read, unlike duration for partial MP4s
-func (c *Converter) monitorOutputProgress(outputPath string, bar *progress.ProgressBar, totalDuration float64, stop chan bool) {
+func (c *Converter) monitorOutputProgress(outputPath string, bar *progress.ProgressBar, totalDuration float64, inputSize int64, stop chan bool) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -514,7 +523,7 @@ func (c *Converter) monitorOutputProgress(outputPath string, bar *progress.Progr
 		case <-ticker.C:
 			elapsed := time.Since(startTime)
 			fileSize := c.getFileSize(outputPath)
-			bar.UpdateWithElapsedAndSize(elapsed, fileSize, totalDuration)
+			bar.UpdateWithElapsedAndSize(elapsed, fileSize, inputSize, totalDuration)
 		}
 	}
 }
