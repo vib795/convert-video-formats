@@ -30,6 +30,32 @@ func NewConverter(opts *types.ConversionOptions) *Converter {
 	}
 }
 
+// checkAV1DecoderSupport checks if ffmpeg has AV1 decoder support (libdav1d)
+func checkAV1DecoderSupport() bool {
+	cmd := exec.Command("ffmpeg", "-decoders")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(output), "libdav1d") || strings.Contains(string(output), "av1")
+}
+
+// getInputVideoCodec detects the video codec of the input file using ffprobe
+func getInputVideoCodec(inputPath string) string {
+	cmd := exec.Command("ffprobe",
+		"-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=codec_name",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		inputPath,
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
+}
+
 // Convert performs the conversion based on the options
 func (c *Converter) Convert() error {
 	// Check if ffmpeg is installed
@@ -85,10 +111,6 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 
 	// Build ffmpeg command
 	args := c.buildFFmpegArgs(inputPath, outputPath)
-
-	// Debug: print the ffmpeg command
-	fmt.Printf("\nDebug: ffmpeg %s\n", strings.Join(args, " "))
-
 	cmd := exec.Command("ffmpeg", args...)
 
 	// Capture stderr for progress
@@ -114,16 +136,10 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 		if utils.FileExists(outputPath) && !c.options.Overwrite {
 			return fmt.Errorf("conversion failed: output file already exists. Use --overwrite to replace it")
 		}
-		// Try to get more details by running ffmpeg again with stderr visible
-		testCmd := exec.Command("ffmpeg", args...)
-		testOutput, _ := testCmd.CombinedOutput()
-		if len(testOutput) > 0 {
-			// Get last 500 chars of output for error context
-			outputStr := string(testOutput)
-			if len(outputStr) > 500 {
-				outputStr = outputStr[len(outputStr)-500:]
-			}
-			return fmt.Errorf("ffmpeg conversion failed: %w\nffmpeg output:\n%s", err, outputStr)
+		// Detect input codec and provide specific guidance for AV1
+		inputCodec := getInputVideoCodec(inputPath)
+		if inputCodec == "av1" && !checkAV1DecoderSupport() {
+			return fmt.Errorf("ffmpeg conversion failed: AV1 codec detected but no AV1 decoder found.\n\nTo fix this, reinstall ffmpeg with AV1 support:\n  brew reinstall ffmpeg\n\nThis will install libdav1d (AV1 decoder)")
 		}
 		return fmt.Errorf("ffmpeg conversion failed: %w. Ensure ffmpeg is properly installed and the input file is valid", err)
 	}
@@ -145,6 +161,11 @@ func (c *Converter) convertWithSpinner(inputPath, outputPath string) error {
 		// Check if output file exists and provide helpful message
 		if utils.FileExists(outputPath) && !c.options.Overwrite {
 			return fmt.Errorf("conversion failed: output file already exists. Use --overwrite to replace it")
+		}
+		// Detect input codec and provide specific guidance for AV1
+		inputCodec := getInputVideoCodec(inputPath)
+		if inputCodec == "av1" && !checkAV1DecoderSupport() {
+			return fmt.Errorf("ffmpeg conversion failed: AV1 codec detected but no AV1 decoder found.\n\nTo fix this, reinstall ffmpeg with AV1 support:\n  brew reinstall ffmpeg\n\nThis will install libdav1d (AV1 decoder)")
 		}
 		return fmt.Errorf("ffmpeg conversion failed: %w. Ensure ffmpeg is properly installed and the input file is valid", err)
 	}
@@ -525,6 +546,8 @@ func (c *Converter) buildFFmpegArgs(inputPath, outputPath string) []string {
 		// For mp4, mov, avi, mkv, flv - use H.264 for video and AAC for audio
 		args = append(args, "-c:v", "libx264")
 		args = append(args, "-c:a", "aac")
+		// Ensure pixel format compatibility (required for some input codecs like AV1)
+		args = append(args, "-pix_fmt", "yuv420p")
 
 		// Quality settings for x264
 		switch strings.ToLower(c.options.Quality) {
