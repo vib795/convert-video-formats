@@ -54,6 +54,12 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 		return fmt.Errorf("%s does not appear to be a video file", inputPath)
 	}
 
+	// Check for AV1 codec and decoder support BEFORE starting conversion
+	inputCodec := utils.GetInputVideoCodec(inputPath)
+	if inputCodec == "av1" && !utils.HasAV1DecoderSupport() {
+		return fmt.Errorf("cannot convert AV1 video: %s\n\n%s", filepath.Base(inputPath), utils.GetAV1ErrorMessage())
+	}
+
 	// Generate output path if not specified
 	if outputPath == "" {
 		outputPath = utils.GetOutputPath(inputPath, c.options)
@@ -250,6 +256,14 @@ func (c *Converter) convertFileWorkerWithBatchProgress(inputPath, outputDir stri
 	outputPath := filepath.Join(outputDir, fmt.Sprintf("%s.%s", nameWithoutExt, c.options.Format))
 	result.OutputFile = outputPath
 
+	// Check for AV1 codec and decoder support BEFORE starting conversion
+	inputCodec := utils.GetInputVideoCodec(inputPath)
+	if inputCodec == "av1" && !utils.HasAV1DecoderSupport() {
+		result.Error = fmt.Errorf("AV1 decoder not available. Run: brew reinstall ffmpeg")
+		batchProgress.CompleteFile(baseName, false)
+		return result
+	}
+
 	// Check if output exists
 	if utils.FileExists(outputPath) && !c.options.Overwrite {
 		result.Error = fmt.Errorf("output file already exists")
@@ -311,6 +325,14 @@ func (c *Converter) convertFileWorker(inputPath, outputDir string) types.Convers
 	nameWithoutExt := strings.TrimSuffix(baseName, ext)
 	outputPath := filepath.Join(outputDir, fmt.Sprintf("%s.%s", nameWithoutExt, c.options.Format))
 	result.OutputFile = outputPath
+
+	// Check for AV1 codec and decoder support BEFORE starting conversion
+	inputCodec := utils.GetInputVideoCodec(inputPath)
+	if inputCodec == "av1" && !utils.HasAV1DecoderSupport() {
+		result.Error = fmt.Errorf("AV1 decoder not available. Run: brew reinstall ffmpeg")
+		progress.Warning(fmt.Sprintf("Skipped %s (AV1 decoder missing)", baseName))
+		return result
+	}
 
 	// Check if output exists
 	if utils.FileExists(outputPath) && !c.options.Overwrite {
