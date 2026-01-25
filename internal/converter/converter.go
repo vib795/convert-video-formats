@@ -401,20 +401,21 @@ func (c *Converter) getVideoDuration(inputPath string) (float64, error) {
 	return duration, nil
 }
 
-// monitorBatchProgress monitors output file duration for batch progress tracking
+// monitorBatchProgress monitors output file size for batch progress tracking
 func (c *Converter) monitorBatchProgress(outputPath string, batchProgress *progress.BatchProgress, filename string, totalDuration float64, stop chan bool) {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+
+	startTime := time.Now()
 
 	for {
 		select {
 		case <-stop:
 			return
 		case <-ticker.C:
-			currentDuration := c.getOutputDuration(outputPath)
-			if currentDuration > 0 {
-				batchProgress.UpdateFile(filename, currentDuration, totalDuration)
-			}
+			elapsed := time.Since(startTime)
+			fileSize := c.getFileSize(outputPath)
+			batchProgress.UpdateFileWithSize(filename, elapsed, fileSize, totalDuration)
 		}
 	}
 }
@@ -498,40 +499,31 @@ func (c *Converter) buildFFmpegArgs(inputPath, outputPath string) []string {
 	return args
 }
 
-// monitorOutputProgress monitors the output file's duration using ffprobe
-// This is the most reliable method as it directly measures actual progress
+// monitorOutputProgress monitors conversion by showing elapsed time and file size
+// This is reliable because file size can always be read, unlike duration for partial MP4s
 func (c *Converter) monitorOutputProgress(outputPath string, bar *progress.ProgressBar, totalDuration float64, stop chan bool) {
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
+
+	startTime := time.Now()
 
 	for {
 		select {
 		case <-stop:
 			return
 		case <-ticker.C:
-			currentDuration := c.getOutputDuration(outputPath)
-			if currentDuration > 0 {
-				bar.Update(currentDuration, totalDuration)
-			}
+			elapsed := time.Since(startTime)
+			fileSize := c.getFileSize(outputPath)
+			bar.UpdateWithElapsedAndSize(elapsed, fileSize, totalDuration)
 		}
 	}
 }
 
-// getOutputDuration gets the current duration of the output file using ffprobe
-func (c *Converter) getOutputDuration(outputPath string) float64 {
-	cmd := exec.Command("ffprobe",
-		"-v", "error",
-		"-show_entries", "format=duration",
-		"-of", "default=noprint_wrappers=1:nokey=1",
-		outputPath,
-	)
-	output, err := cmd.Output()
+// getFileSize gets the current size of a file in bytes
+func (c *Converter) getFileSize(path string) int64 {
+	info, err := os.Stat(path)
 	if err != nil {
 		return 0
 	}
-	duration, err := strconv.ParseFloat(strings.TrimSpace(string(output)), 64)
-	if err != nil {
-		return 0
-	}
-	return duration
+	return info.Size()
 }

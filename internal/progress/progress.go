@@ -222,8 +222,7 @@ func (p *ProgressBar) showInitial() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	bar := strings.Repeat("░", p.width)
-	line := fmt.Sprintf("\r%s [%s] 0.0%% (00:00/--:--)", p.message, bar)
+	line := fmt.Sprintf("\r%s [00:00 elapsed, 0 B written]", p.message)
 	fmt.Print(line)
 	p.lastLine = line
 }
@@ -290,6 +289,57 @@ func (p *ProgressBar) UpdateWithMessage(msg string) {
 	p.lastLine = line
 }
 
+// UpdateWithElapsedAndSize updates with elapsed time and file size (reliable progress display)
+func (p *ProgressBar) UpdateWithElapsedAndSize(elapsed time.Duration, fileSize int64, totalDuration float64) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if !p.active {
+		return
+	}
+
+	// Format elapsed time
+	elapsedSecs := int(elapsed.Seconds())
+	elapsedStr := fmt.Sprintf("%02d:%02d", elapsedSecs/60, elapsedSecs%60)
+
+	// Format file size
+	sizeStr := formatFileSize(fileSize)
+
+	// Format total duration
+	totalStr := formatDuration(totalDuration)
+
+	// Create the line with elapsed time and file size
+	line := fmt.Sprintf("\r%s [%s elapsed, %s written] (duration: %s)", p.message, elapsedStr, sizeStr, totalStr)
+
+	// Clear previous line if new one is shorter
+	if len(p.lastLine) > len(line) {
+		fmt.Print("\r" + strings.Repeat(" ", len(p.lastLine)) + "\r")
+	}
+
+	fmt.Print(line)
+	p.lastLine = line
+}
+
+// formatFileSize formats bytes into human readable format
+func formatFileSize(bytes int64) string {
+	const (
+		KB = 1024
+		MB = KB * 1024
+		GB = MB * 1024
+	)
+
+	switch {
+	case bytes >= GB:
+		return fmt.Sprintf("%.1f GB", float64(bytes)/float64(GB))
+	case bytes >= MB:
+		return fmt.Sprintf("%.1f MB", float64(bytes)/float64(MB))
+	case bytes >= KB:
+		return fmt.Sprintf("%.1f KB", float64(bytes)/float64(KB))
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
+}
+
 // Stop stops the progress bar
 func (p *ProgressBar) Stop() {
 	p.mu.Lock()
@@ -351,6 +401,8 @@ type fileProgress struct {
 	percentage  float64
 	currentTime float64
 	totalTime   float64
+	elapsed     time.Duration
+	fileSize    int64
 }
 
 // NewBatchProgress creates a new batch progress tracker
@@ -385,6 +437,19 @@ func (bp *BatchProgress) UpdateFile(filename string, current, total float64) {
 		percentage:  percentage,
 		currentTime: current,
 		totalTime:   total,
+	}
+}
+
+// UpdateFileWithSize updates progress for a specific file with elapsed time and file size
+func (bp *BatchProgress) UpdateFileWithSize(filename string, elapsed time.Duration, fileSize int64, totalDuration float64) {
+	bp.mu.Lock()
+	defer bp.mu.Unlock()
+
+	bp.active[filename] = &fileProgress{
+		filename:  filename,
+		totalTime: totalDuration,
+		elapsed:   elapsed,
+		fileSize:  fileSize,
 	}
 }
 
@@ -484,11 +549,22 @@ func (bp *BatchProgress) display() {
 
 	for _, filename := range activeFiles {
 		fp := bp.active[filename]
-		bar := buildProgressBar(fp.percentage, 30)
-		currentStr := formatDuration(fp.currentTime)
-		totalStr := formatDuration(fp.totalTime)
-		fmt.Printf("  %s [%s] %.1f%% (%s/%s)\n",
-			truncateFilename(fp.filename, 40), bar, fp.percentage, currentStr, totalStr)
+		if fp.elapsed > 0 || fp.fileSize > 0 {
+			// New format: elapsed time and file size
+			elapsedSecs := int(fp.elapsed.Seconds())
+			elapsedStr := fmt.Sprintf("%02d:%02d", elapsedSecs/60, elapsedSecs%60)
+			sizeStr := formatFileSize(fp.fileSize)
+			totalStr := formatDuration(fp.totalTime)
+			fmt.Printf("  %s [%s elapsed, %s written] (duration: %s)\n",
+				truncateFilename(fp.filename, 40), elapsedStr, sizeStr, totalStr)
+		} else {
+			// Old format: percentage-based
+			bar := buildProgressBar(fp.percentage, 30)
+			currentStr := formatDuration(fp.currentTime)
+			totalStr := formatDuration(fp.totalTime)
+			fmt.Printf("  %s [%s] %.1f%% (%s/%s)\n",
+				truncateFilename(fp.filename, 40), bar, fp.percentage, currentStr, totalStr)
+		}
 	}
 
 	// Track how many lines we drew
