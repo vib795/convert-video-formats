@@ -492,9 +492,8 @@ func (c *Converter) convertFileWorkerSimple(inputPath, outputPath, baseName stri
 // buildFFmpegArgs builds the ffmpeg command arguments based on options
 func (c *Converter) buildFFmpegArgs(inputPath, outputPath string) []string {
 	args := []string{
+		"-hwaccel", "none", // Force software decoding (fixes AV1 on some platforms)
 		"-i", inputPath,
-		"-progress", "pipe:2", // Output progress to stderr
-		"-stats",              // Show statistics
 	}
 
 	// Determine output format and set appropriate codecs
