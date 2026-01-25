@@ -1,13 +1,10 @@
 package converter
 
 import (
-	"bufio"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -84,18 +81,8 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 	bar := progress.NewProgressBar(fmt.Sprintf("Converting %s", filepath.Base(inputPath)))
 	bar.Start()
 
-	// Create a temporary file for ffmpeg progress output
-	progressFile, err := os.CreateTemp("", "ffmpeg-progress-*.txt")
-	if err != nil {
-		bar.Stop()
-		return fmt.Errorf("failed to create progress file: %w", err)
-	}
-	progressPath := progressFile.Name()
-	progressFile.Close()
-	defer os.Remove(progressPath)
-
-	// Build ffmpeg command with progress file
-	args := c.buildFFmpegArgsWithProgress(inputPath, outputPath, progressPath)
+	// Build ffmpeg command (simple, no progress flags)
+	args := c.buildFFmpegArgs(inputPath, outputPath)
 	cmd := exec.Command("ffmpeg", args...)
 
 	// Start the command
@@ -104,9 +91,9 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
-	// Parse progress from file in background
+	// Monitor output file duration in background
 	stopProgress := make(chan bool)
-	go c.parseProgressFromFile(progressPath, bar, duration, stopProgress)
+	go c.monitorOutputProgress(outputPath, bar, duration, stopProgress)
 
 	// Wait for completion
 	if err := cmd.Wait(); err != nil {
@@ -280,14 +267,6 @@ func (c *Converter) convertFileWorkerWithBatchProgress(inputPath, outputDir stri
 	args := c.buildFFmpegArgs(inputPath, outputPath)
 	cmd := exec.Command("ffmpeg", args...)
 
-	// Capture stdout for progress (ffmpeg -progress pipe:1 outputs to stdout)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		result.Error = fmt.Errorf("failed to create stdout pipe: %w", err)
-		batchProgress.CompleteFile(baseName, false)
-		return result
-	}
-
 	// Start the command
 	if err := cmd.Start(); err != nil {
 		result.Error = fmt.Errorf("failed to start ffmpeg: %w", err)
@@ -295,16 +274,19 @@ func (c *Converter) convertFileWorkerWithBatchProgress(inputPath, outputDir stri
 		return result
 	}
 
-	// Parse progress from stdout
-	go c.parseProgressBatch(stdout, batchProgress, baseName, duration)
+	// Monitor output file duration for progress
+	stopProgress := make(chan bool)
+	go c.monitorBatchProgress(outputPath, batchProgress, baseName, duration, stopProgress)
 
 	// Wait for completion
 	if err := cmd.Wait(); err != nil {
+		close(stopProgress)
 		result.Error = err
 		batchProgress.CompleteFile(baseName, false)
 		return result
 	}
 
+	close(stopProgress)
 	result.Success = true
 	batchProgress.CompleteFile(baseName, true)
 	return result
@@ -346,14 +328,6 @@ func (c *Converter) convertFileWorker(inputPath, outputDir string) types.Convers
 	args := c.buildFFmpegArgs(inputPath, outputPath)
 	cmd := exec.Command("ffmpeg", args...)
 
-	// Capture stdout for progress (ffmpeg -progress pipe:1 outputs to stdout)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		bar.Stop()
-		result.Error = fmt.Errorf("failed to create stdout pipe: %w", err)
-		return result
-	}
-
 	// Start the command
 	if err := cmd.Start(); err != nil {
 		bar.Stop()
@@ -361,16 +335,19 @@ func (c *Converter) convertFileWorker(inputPath, outputDir string) types.Convers
 		return result
 	}
 
-	// Parse progress from stdout
-	go c.parseProgress(stdout, bar, duration)
+	// Monitor output file duration for progress
+	stopProgress := make(chan bool)
+	go c.monitorOutputProgress(outputPath, bar, duration, stopProgress)
 
 	// Wait for completion
 	if err := cmd.Wait(); err != nil {
+		close(stopProgress)
 		result.Error = err
 		bar.Error(fmt.Sprintf("Failed to convert %s", baseName))
 		return result
 	}
 
+	close(stopProgress)
 	result.Success = true
 	bar.Success(fmt.Sprintf("Converted %s", baseName))
 	return result
@@ -424,75 +401,20 @@ func (c *Converter) getVideoDuration(inputPath string) (float64, error) {
 	return duration, nil
 }
 
-// parseProgress parses FFmpeg's stderr output for progress information
-func (c *Converter) parseProgress(stderr io.ReadCloser, bar *progress.ProgressBar, totalDuration float64) {
-	defer stderr.Close()
+// monitorBatchProgress monitors output file duration for batch progress tracking
+func (c *Converter) monitorBatchProgress(outputPath string, batchProgress *progress.BatchProgress, filename string, totalDuration float64, stop chan bool) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
 
-	// Use a custom split function that splits on \r or \n
-	scanner := bufio.NewScanner(stderr)
-	scanner.Split(splitOnCarriageReturnOrNewline)
-	// Match "out_time=" from ffmpeg -progress output (e.g., out_time=00:01:23.456789)
-	timeRegex := regexp.MustCompile(`out_time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)`)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		matches := timeRegex.FindStringSubmatch(line)
-		if len(matches) == 4 {
-			hours, _ := strconv.ParseFloat(matches[1], 64)
-			minutes, _ := strconv.ParseFloat(matches[2], 64)
-			seconds, _ := strconv.ParseFloat(matches[3], 64)
-
-			currentTime := hours*3600 + minutes*60 + seconds
-			bar.Update(currentTime, totalDuration)
-		}
-	}
-}
-
-// splitOnCarriageReturnOrNewline is a bufio.SplitFunc that splits on \r or \n
-func splitOnCarriageReturnOrNewline(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if atEOF && len(data) == 0 {
-		return 0, nil, nil
-	}
-	// Find the first \r or \n
-	for i := 0; i < len(data); i++ {
-		if data[i] == '\r' || data[i] == '\n' {
-			return i + 1, data[0:i], nil
-		}
-	}
-	// If at EOF and no delimiter found, return the rest
-	if atEOF {
-		return len(data), data, nil
-	}
-	// Request more data
-	return 0, nil, nil
-}
-
-// parseProgressBatch parses FFmpeg's stdout for batch progress tracking
-func (c *Converter) parseProgressBatch(stdout io.ReadCloser, batchProgress *progress.BatchProgress, filename string, totalDuration float64) {
-	defer stdout.Close()
-
-	// Use a custom split function that splits on \r or \n
-	scanner := bufio.NewScanner(stdout)
-	scanner.Split(splitOnCarriageReturnOrNewline)
-	// Match "out_time=" from ffmpeg -progress output (e.g., out_time=00:01:23.456789)
-	timeRegex := regexp.MustCompile(`out_time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)`)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// Look for time= or out_time= in the output
-		matches := timeRegex.FindStringSubmatch(line)
-		if len(matches) == 4 {
-			// Parse HH:MM:SS.ss format
-			hours, _ := strconv.ParseFloat(matches[1], 64)
-			minutes, _ := strconv.ParseFloat(matches[2], 64)
-			seconds, _ := strconv.ParseFloat(matches[3], 64)
-
-			currentTime := hours*3600 + minutes*60 + seconds
-
-			// Update batch progress
-			batchProgress.UpdateFile(filename, currentTime, totalDuration)
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			currentDuration := c.getOutputDuration(outputPath)
+			if currentDuration > 0 {
+				batchProgress.UpdateFile(filename, currentDuration, totalDuration)
+			}
 		}
 	}
 }
@@ -520,9 +442,8 @@ func (c *Converter) convertFileWorkerSimple(inputPath, outputPath, baseName stri
 // buildFFmpegArgs builds the ffmpeg command arguments based on options
 func (c *Converter) buildFFmpegArgs(inputPath, outputPath string) []string {
 	args := []string{
-		"-nostdin",           // Don't wait for stdin input
+		"-nostdin", // Don't wait for stdin input
 		"-i", inputPath,
-		"-progress", "pipe:1", // Output machine-readable progress to stdout
 	}
 
 	// Determine output format and set appropriate codecs
@@ -577,61 +498,10 @@ func (c *Converter) buildFFmpegArgs(inputPath, outputPath string) []string {
 	return args
 }
 
-// buildFFmpegArgsWithProgress builds ffmpeg args with progress output to a file
-func (c *Converter) buildFFmpegArgsWithProgress(inputPath, outputPath, progressPath string) []string {
-	args := []string{
-		"-nostdin",
-		"-i", inputPath,
-		"-progress", progressPath,
-	}
-
-	// Determine output format and set appropriate codecs
-	format := strings.ToLower(c.options.Format)
-
-	if format == "webm" {
-		args = append(args, "-c:v", "libvpx-vp9")
-		args = append(args, "-c:a", "libopus")
-		switch strings.ToLower(c.options.Quality) {
-		case "high":
-			args = append(args, "-crf", "15", "-b:v", "0")
-		case "medium":
-			args = append(args, "-crf", "30", "-b:v", "0")
-		case "low":
-			args = append(args, "-crf", "40", "-b:v", "0")
-		default:
-			args = append(args, "-crf", "30", "-b:v", "0")
-		}
-	} else {
-		args = append(args, "-c:v", "libx264")
-		args = append(args, "-c:a", "aac")
-		args = append(args, "-pix_fmt", "yuv420p")
-		switch strings.ToLower(c.options.Quality) {
-		case "high":
-			args = append(args, "-crf", "18", "-preset", "slow")
-		case "medium":
-			args = append(args, "-crf", "23", "-preset", "medium")
-		case "low":
-			args = append(args, "-crf", "28", "-preset", "fast")
-		default:
-			args = append(args, "-crf", "23", "-preset", "medium")
-		}
-	}
-
-	if c.options.Overwrite {
-		args = append(args, "-y")
-	} else {
-		args = append(args, "-n")
-	}
-
-	args = append(args, outputPath)
-	return args
-}
-
-// parseProgressFromFile reads progress from a file written by ffmpeg
-func (c *Converter) parseProgressFromFile(progressPath string, bar *progress.ProgressBar, totalDuration float64, stop chan bool) {
-	timeRegex := regexp.MustCompile(`out_time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)`)
-
-	ticker := time.NewTicker(500 * time.Millisecond)
+// monitorOutputProgress monitors the output file's duration using ffprobe
+// This is the most reliable method as it directly measures actual progress
+func (c *Converter) monitorOutputProgress(outputPath string, bar *progress.ProgressBar, totalDuration float64, stop chan bool) {
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -639,24 +509,29 @@ func (c *Converter) parseProgressFromFile(progressPath string, bar *progress.Pro
 		case <-stop:
 			return
 		case <-ticker.C:
-			data, err := os.ReadFile(progressPath)
-			if err != nil {
-				continue
-			}
-
-			lines := strings.Split(string(data), "\n")
-			// Find the last out_time line
-			for i := len(lines) - 1; i >= 0; i-- {
-				matches := timeRegex.FindStringSubmatch(lines[i])
-				if len(matches) == 4 {
-					hours, _ := strconv.ParseFloat(matches[1], 64)
-					minutes, _ := strconv.ParseFloat(matches[2], 64)
-					seconds, _ := strconv.ParseFloat(matches[3], 64)
-					currentTime := hours*3600 + minutes*60 + seconds
-					bar.Update(currentTime, totalDuration)
-					break
-				}
+			currentDuration := c.getOutputDuration(outputPath)
+			if currentDuration > 0 {
+				bar.Update(currentDuration, totalDuration)
 			}
 		}
 	}
+}
+
+// getOutputDuration gets the current duration of the output file using ffprobe
+func (c *Converter) getOutputDuration(outputPath string) float64 {
+	cmd := exec.Command("ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		outputPath,
+	)
+	output, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+	duration, err := strconv.ParseFloat(strings.TrimSpace(string(output)), 64)
+	if err != nil {
+		return 0
+	}
+	return duration
 }
