@@ -222,7 +222,7 @@ func (p *ProgressBar) showInitial() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	line := fmt.Sprintf("\r%s [00:00 elapsed, 0 B written]", p.message)
+	line := fmt.Sprintf("\r%s [00:00 elapsed, 0 B written, calculating...]", p.message)
 	fmt.Print(line)
 	p.lastLine = line
 }
@@ -289,7 +289,7 @@ func (p *ProgressBar) UpdateWithMessage(msg string) {
 	p.lastLine = line
 }
 
-// UpdateWithElapsedAndSize updates with elapsed time and file size (reliable progress display)
+// UpdateWithElapsedAndSize updates with elapsed time, file size, and ETA (reliable progress display)
 func (p *ProgressBar) UpdateWithElapsedAndSize(elapsed time.Duration, fileSize int64, inputSize int64, totalDuration float64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -302,15 +302,40 @@ func (p *ProgressBar) UpdateWithElapsedAndSize(elapsed time.Duration, fileSize i
 	elapsedSecs := int(elapsed.Seconds())
 	elapsedStr := fmt.Sprintf("%02d:%02d", elapsedSecs/60, elapsedSecs%60)
 
-	// Format file sizes
+	// Format current file size
 	currentSizeStr := formatFileSize(fileSize)
-	inputSizeStr := formatFileSize(inputSize)
 
-	// Format total duration
-	totalStr := formatDuration(totalDuration)
+	// Calculate ETA based on encoding speed
+	etaStr := "calculating..."
+	if fileSize > 0 && elapsed.Seconds() > 2 {
+		// Estimate progress based on file size ratio
+		// Use input size as baseline, but account for potential size increase
+		estimatedFinalSize := inputSize
+		if fileSize > inputSize/2 {
+			// If output is already larger than half input, adjust estimate
+			// based on current output/input ratio projected to completion
+			ratio := float64(fileSize) / float64(inputSize)
+			if ratio > 0.5 {
+				// Estimate final size will be roughly: current_ratio * input_size
+				// But cap the growth estimate
+				estimatedFinalSize = int64(float64(inputSize) * max(ratio*1.1, 1.0))
+			}
+		}
 
-	// Create the line with elapsed time and file size comparison
-	line := fmt.Sprintf("\r%s [%s elapsed, %s / %s] (duration: %s)", p.message, elapsedStr, currentSizeStr, inputSizeStr, totalStr)
+		progress := float64(fileSize) / float64(estimatedFinalSize)
+		if progress > 0.01 && progress < 0.99 {
+			// ETA = elapsed * (1 - progress) / progress
+			remainingSeconds := elapsed.Seconds() * (1.0 - progress) / progress
+			if remainingSeconds > 0 && remainingSeconds < 86400 { // Cap at 24 hours
+				etaStr = fmt.Sprintf("~%s remaining", formatDurationShort(remainingSeconds))
+			}
+		} else if progress >= 0.99 {
+			etaStr = "almost done"
+		}
+	}
+
+	// Create the line with elapsed time, file size, and ETA
+	line := fmt.Sprintf("\r%s [%s elapsed, %s written, %s]", p.message, elapsedStr, currentSizeStr, etaStr)
 
 	// Clear previous line if new one is shorter
 	if len(p.lastLine) > len(line) {
@@ -319,6 +344,24 @@ func (p *ProgressBar) UpdateWithElapsedAndSize(elapsed time.Duration, fileSize i
 
 	fmt.Print(line)
 	p.lastLine = line
+}
+
+// formatDurationShort formats seconds into a short readable format
+func formatDurationShort(seconds float64) string {
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", int(seconds))
+	} else if seconds < 3600 {
+		mins := int(seconds) / 60
+		secs := int(seconds) % 60
+		if secs == 0 {
+			return fmt.Sprintf("%dm", mins)
+		}
+		return fmt.Sprintf("%dm %ds", mins, secs)
+	} else {
+		hours := int(seconds) / 3600
+		mins := (int(seconds) % 3600) / 60
+		return fmt.Sprintf("%dh %dm", hours, mins)
+	}
 }
 
 // formatFileSize formats bytes into human readable format
@@ -557,10 +600,30 @@ func (bp *BatchProgress) display() {
 			elapsedSecs := int(fp.elapsed.Seconds())
 			elapsedStr := fmt.Sprintf("%02d:%02d", elapsedSecs/60, elapsedSecs%60)
 			currentSizeStr := formatFileSize(fp.fileSize)
-			inputSizeStr := formatFileSize(fp.inputSize)
-			totalStr := formatDuration(fp.totalTime)
-			fmt.Printf("  %s [%s elapsed, %s / %s] (duration: %s)\n",
-				truncateFilename(fp.filename, 40), elapsedStr, currentSizeStr, inputSizeStr, totalStr)
+
+			// Calculate ETA
+			etaStr := "..."
+			if fp.fileSize > 0 && fp.elapsed.Seconds() > 2 {
+				estimatedFinalSize := fp.inputSize
+				if fp.fileSize > fp.inputSize/2 {
+					ratio := float64(fp.fileSize) / float64(fp.inputSize)
+					if ratio > 0.5 {
+						estimatedFinalSize = int64(float64(fp.inputSize) * max(ratio*1.1, 1.0))
+					}
+				}
+				progress := float64(fp.fileSize) / float64(estimatedFinalSize)
+				if progress > 0.01 && progress < 0.99 {
+					remainingSeconds := fp.elapsed.Seconds() * (1.0 - progress) / progress
+					if remainingSeconds > 0 && remainingSeconds < 86400 {
+						etaStr = fmt.Sprintf("~%s left", formatDurationShort(remainingSeconds))
+					}
+				} else if progress >= 0.99 {
+					etaStr = "almost done"
+				}
+			}
+
+			fmt.Printf("  %s [%s elapsed, %s, %s]\n",
+				truncateFilename(fp.filename, 40), elapsedStr, currentSizeStr, etaStr)
 		} else {
 			// Old format: percentage-based
 			bar := buildProgressBar(fp.percentage, 30)
