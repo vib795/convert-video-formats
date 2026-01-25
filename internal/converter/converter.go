@@ -85,6 +85,10 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 
 	// Build ffmpeg command
 	args := c.buildFFmpegArgs(inputPath, outputPath)
+
+	// Debug: print the ffmpeg command
+	fmt.Printf("\nDebug: ffmpeg %s\n", strings.Join(args, " "))
+
 	cmd := exec.Command("ffmpeg", args...)
 
 	// Capture stderr for progress
@@ -109,6 +113,17 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 		// Check if output file exists and provide helpful message
 		if utils.FileExists(outputPath) && !c.options.Overwrite {
 			return fmt.Errorf("conversion failed: output file already exists. Use --overwrite to replace it")
+		}
+		// Try to get more details by running ffmpeg again with stderr visible
+		testCmd := exec.Command("ffmpeg", args...)
+		testOutput, _ := testCmd.CombinedOutput()
+		if len(testOutput) > 0 {
+			// Get last 500 chars of output for error context
+			outputStr := string(testOutput)
+			if len(outputStr) > 500 {
+				outputStr = outputStr[len(outputStr)-500:]
+			}
+			return fmt.Errorf("ffmpeg conversion failed: %w\nffmpeg output:\n%s", err, outputStr)
 		}
 		return fmt.Errorf("ffmpeg conversion failed: %w. Ensure ffmpeg is properly installed and the input file is valid", err)
 	}
