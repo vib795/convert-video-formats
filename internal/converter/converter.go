@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/vib795/convert-video-formats/internal/progress"
 	"github.com/vib795/convert-video-formats/internal/utils"
@@ -83,16 +84,19 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 	bar := progress.NewProgressBar(fmt.Sprintf("Converting %s", filepath.Base(inputPath)))
 	bar.Start()
 
-	// Build ffmpeg command
-	args := c.buildFFmpegArgs(inputPath, outputPath)
-	cmd := exec.Command("ffmpeg", args...)
-
-	// Capture stdout for progress (ffmpeg -progress pipe:1 outputs to stdout)
-	stdout, err := cmd.StdoutPipe()
+	// Create a temporary file for ffmpeg progress output
+	progressFile, err := os.CreateTemp("", "ffmpeg-progress-*.txt")
 	if err != nil {
 		bar.Stop()
-		return fmt.Errorf("failed to create stdout pipe: %w", err)
+		return fmt.Errorf("failed to create progress file: %w", err)
 	}
+	progressPath := progressFile.Name()
+	progressFile.Close()
+	defer os.Remove(progressPath)
+
+	// Build ffmpeg command with progress file
+	args := c.buildFFmpegArgsWithProgress(inputPath, outputPath, progressPath)
+	cmd := exec.Command("ffmpeg", args...)
 
 	// Start the command
 	if err := cmd.Start(); err != nil {
@@ -100,11 +104,13 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
-	// Parse progress from stdout
-	go c.parseProgress(stdout, bar, duration)
+	// Parse progress from file in background
+	stopProgress := make(chan bool)
+	go c.parseProgressFromFile(progressPath, bar, duration, stopProgress)
 
 	// Wait for completion
 	if err := cmd.Wait(); err != nil {
+		close(stopProgress)
 		bar.Error(fmt.Sprintf("Failed to convert %s", filepath.Base(inputPath)))
 		// Check if output file exists and provide helpful message
 		if utils.FileExists(outputPath) && !c.options.Overwrite {
@@ -118,6 +124,7 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 		return fmt.Errorf("ffmpeg conversion failed: %w. Ensure ffmpeg is properly installed and the input file is valid", err)
 	}
 
+	close(stopProgress)
 	bar.Success(fmt.Sprintf("Converted %s → %s", filepath.Base(inputPath), filepath.Base(outputPath)))
 	return nil
 }
@@ -568,4 +575,88 @@ func (c *Converter) buildFFmpegArgs(inputPath, outputPath string) []string {
 	args = append(args, outputPath)
 
 	return args
+}
+
+// buildFFmpegArgsWithProgress builds ffmpeg args with progress output to a file
+func (c *Converter) buildFFmpegArgsWithProgress(inputPath, outputPath, progressPath string) []string {
+	args := []string{
+		"-nostdin",
+		"-i", inputPath,
+		"-progress", progressPath,
+	}
+
+	// Determine output format and set appropriate codecs
+	format := strings.ToLower(c.options.Format)
+
+	if format == "webm" {
+		args = append(args, "-c:v", "libvpx-vp9")
+		args = append(args, "-c:a", "libopus")
+		switch strings.ToLower(c.options.Quality) {
+		case "high":
+			args = append(args, "-crf", "15", "-b:v", "0")
+		case "medium":
+			args = append(args, "-crf", "30", "-b:v", "0")
+		case "low":
+			args = append(args, "-crf", "40", "-b:v", "0")
+		default:
+			args = append(args, "-crf", "30", "-b:v", "0")
+		}
+	} else {
+		args = append(args, "-c:v", "libx264")
+		args = append(args, "-c:a", "aac")
+		args = append(args, "-pix_fmt", "yuv420p")
+		switch strings.ToLower(c.options.Quality) {
+		case "high":
+			args = append(args, "-crf", "18", "-preset", "slow")
+		case "medium":
+			args = append(args, "-crf", "23", "-preset", "medium")
+		case "low":
+			args = append(args, "-crf", "28", "-preset", "fast")
+		default:
+			args = append(args, "-crf", "23", "-preset", "medium")
+		}
+	}
+
+	if c.options.Overwrite {
+		args = append(args, "-y")
+	} else {
+		args = append(args, "-n")
+	}
+
+	args = append(args, outputPath)
+	return args
+}
+
+// parseProgressFromFile reads progress from a file written by ffmpeg
+func (c *Converter) parseProgressFromFile(progressPath string, bar *progress.ProgressBar, totalDuration float64, stop chan bool) {
+	timeRegex := regexp.MustCompile(`out_time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)`)
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			data, err := os.ReadFile(progressPath)
+			if err != nil {
+				continue
+			}
+
+			lines := strings.Split(string(data), "\n")
+			// Find the last out_time line
+			for i := len(lines) - 1; i >= 0; i-- {
+				matches := timeRegex.FindStringSubmatch(lines[i])
+				if len(matches) == 4 {
+					hours, _ := strconv.ParseFloat(matches[1], 64)
+					minutes, _ := strconv.ParseFloat(matches[2], 64)
+					seconds, _ := strconv.ParseFloat(matches[3], 64)
+					currentTime := hours*3600 + minutes*60 + seconds
+					bar.Update(currentTime, totalDuration)
+					break
+				}
+			}
+		}
+	}
 }
