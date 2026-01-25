@@ -68,6 +68,11 @@ func runConvert(cmd *cobra.Command, args []string) error {
 	// Register signal handler for graceful terminal cleanup
 	progress.RegisterCleanupHandler()
 
+	// Check all dependencies (ffmpeg, ffprobe, etc.) with helpful error messages
+	if err := utils.CheckAllDependencies(); err != nil {
+		return err
+	}
+
 	// Determine input path from either flag or positional argument
 	var input string
 	if inputPath != "" {

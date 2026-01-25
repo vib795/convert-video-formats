@@ -30,32 +30,6 @@ func NewConverter(opts *types.ConversionOptions) *Converter {
 	}
 }
 
-// checkAV1DecoderSupport checks if ffmpeg has AV1 decoder support (libdav1d)
-func checkAV1DecoderSupport() bool {
-	cmd := exec.Command("ffmpeg", "-decoders")
-	output, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(output), "libdav1d") || strings.Contains(string(output), "av1")
-}
-
-// getInputVideoCodec detects the video codec of the input file using ffprobe
-func getInputVideoCodec(inputPath string) string {
-	cmd := exec.Command("ffprobe",
-		"-v", "error",
-		"-select_streams", "v:0",
-		"-show_entries", "stream=codec_name",
-		"-of", "default=noprint_wrappers=1:nokey=1",
-		inputPath,
-	)
-	output, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(output))
-}
-
 // Convert performs the conversion based on the options
 func (c *Converter) Convert() error {
 	// Check if ffmpeg is installed
@@ -137,9 +111,9 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 			return fmt.Errorf("conversion failed: output file already exists. Use --overwrite to replace it")
 		}
 		// Detect input codec and provide specific guidance for AV1
-		inputCodec := getInputVideoCodec(inputPath)
-		if inputCodec == "av1" && !checkAV1DecoderSupport() {
-			return fmt.Errorf("ffmpeg conversion failed: AV1 codec detected but no AV1 decoder found.\n\nTo fix this, reinstall ffmpeg with AV1 support:\n  brew reinstall ffmpeg\n\nThis will install libdav1d (AV1 decoder)")
+		inputCodec := utils.GetInputVideoCodec(inputPath)
+		if inputCodec == "av1" && !utils.HasAV1DecoderSupport() {
+			return fmt.Errorf("ffmpeg conversion failed: %w\n\n%s", err, utils.GetAV1ErrorMessage())
 		}
 		return fmt.Errorf("ffmpeg conversion failed: %w. Ensure ffmpeg is properly installed and the input file is valid", err)
 	}
@@ -163,9 +137,9 @@ func (c *Converter) convertWithSpinner(inputPath, outputPath string) error {
 			return fmt.Errorf("conversion failed: output file already exists. Use --overwrite to replace it")
 		}
 		// Detect input codec and provide specific guidance for AV1
-		inputCodec := getInputVideoCodec(inputPath)
-		if inputCodec == "av1" && !checkAV1DecoderSupport() {
-			return fmt.Errorf("ffmpeg conversion failed: AV1 codec detected but no AV1 decoder found.\n\nTo fix this, reinstall ffmpeg with AV1 support:\n  brew reinstall ffmpeg\n\nThis will install libdav1d (AV1 decoder)")
+		inputCodec := utils.GetInputVideoCodec(inputPath)
+		if inputCodec == "av1" && !utils.HasAV1DecoderSupport() {
+			return fmt.Errorf("ffmpeg conversion failed: %w\n\n%s", err, utils.GetAV1ErrorMessage())
 		}
 		return fmt.Errorf("ffmpeg conversion failed: %w. Ensure ffmpeg is properly installed and the input file is valid", err)
 	}
