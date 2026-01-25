@@ -421,7 +421,10 @@ func (c *Converter) getVideoDuration(inputPath string) (float64, error) {
 func (c *Converter) parseProgress(stderr io.ReadCloser, bar *progress.ProgressBar, totalDuration float64) {
 	defer stderr.Close()
 
+	// Use a custom split function that splits on \r or \n
+	// FFmpeg uses \r to update progress on the same line
 	scanner := bufio.NewScanner(stderr)
+	scanner.Split(splitOnCarriageReturnOrNewline)
 	timeRegex := regexp.MustCompile(`time=(\d{2}):(\d{2}):(\d{2}\.\d{2})`)
 
 	for scanner.Scan() {
@@ -443,11 +446,33 @@ func (c *Converter) parseProgress(stderr io.ReadCloser, bar *progress.ProgressBa
 	}
 }
 
+// splitOnCarriageReturnOrNewline is a bufio.SplitFunc that splits on \r or \n
+func splitOnCarriageReturnOrNewline(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	// Find the first \r or \n
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\r' || data[i] == '\n' {
+			return i + 1, data[0:i], nil
+		}
+	}
+	// If at EOF and no delimiter found, return the rest
+	if atEOF {
+		return len(data), data, nil
+	}
+	// Request more data
+	return 0, nil, nil
+}
+
 // parseProgressBatch parses FFmpeg's stderr output for batch progress tracking
 func (c *Converter) parseProgressBatch(stderr io.ReadCloser, batchProgress *progress.BatchProgress, filename string, totalDuration float64) {
 	defer stderr.Close()
 
+	// Use a custom split function that splits on \r or \n
+	// FFmpeg uses \r to update progress on the same line
 	scanner := bufio.NewScanner(stderr)
+	scanner.Split(splitOnCarriageReturnOrNewline)
 	timeRegex := regexp.MustCompile(`time=(\d{2}):(\d{2}):(\d{2}\.\d{2})`)
 
 	for scanner.Scan() {
