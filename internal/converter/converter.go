@@ -87,11 +87,11 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 	args := c.buildFFmpegArgs(inputPath, outputPath)
 	cmd := exec.Command("ffmpeg", args...)
 
-	// Capture stderr for progress
-	stderr, err := cmd.StderrPipe()
+	// Capture stdout for progress (ffmpeg -progress pipe:1 outputs to stdout)
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		bar.Stop()
-		return fmt.Errorf("failed to create stderr pipe: %w", err)
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
 	// Start the command
@@ -100,8 +100,8 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
-	// Parse progress from stderr
-	go c.parseProgress(stderr, bar, duration)
+	// Parse progress from stdout
+	go c.parseProgress(stdout, bar, duration)
 
 	// Wait for completion
 	if err := cmd.Wait(); err != nil {
@@ -273,10 +273,10 @@ func (c *Converter) convertFileWorkerWithBatchProgress(inputPath, outputDir stri
 	args := c.buildFFmpegArgs(inputPath, outputPath)
 	cmd := exec.Command("ffmpeg", args...)
 
-	// Capture stderr for progress
-	stderr, err := cmd.StderrPipe()
+	// Capture stdout for progress (ffmpeg -progress pipe:1 outputs to stdout)
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		result.Error = fmt.Errorf("failed to create stderr pipe: %w", err)
+		result.Error = fmt.Errorf("failed to create stdout pipe: %w", err)
 		batchProgress.CompleteFile(baseName, false)
 		return result
 	}
@@ -288,8 +288,8 @@ func (c *Converter) convertFileWorkerWithBatchProgress(inputPath, outputDir stri
 		return result
 	}
 
-	// Parse progress from stderr
-	go c.parseProgressBatch(stderr, batchProgress, baseName, duration)
+	// Parse progress from stdout
+	go c.parseProgressBatch(stdout, batchProgress, baseName, duration)
 
 	// Wait for completion
 	if err := cmd.Wait(); err != nil {
@@ -339,11 +339,11 @@ func (c *Converter) convertFileWorker(inputPath, outputDir string) types.Convers
 	args := c.buildFFmpegArgs(inputPath, outputPath)
 	cmd := exec.Command("ffmpeg", args...)
 
-	// Capture stderr for progress
-	stderr, err := cmd.StderrPipe()
+	// Capture stdout for progress (ffmpeg -progress pipe:1 outputs to stdout)
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		bar.Stop()
-		result.Error = fmt.Errorf("failed to create stderr pipe: %w", err)
+		result.Error = fmt.Errorf("failed to create stdout pipe: %w", err)
 		return result
 	}
 
@@ -354,8 +354,8 @@ func (c *Converter) convertFileWorker(inputPath, outputDir string) types.Convers
 		return result
 	}
 
-	// Parse progress from stderr
-	go c.parseProgress(stderr, bar, duration)
+	// Parse progress from stdout
+	go c.parseProgress(stdout, bar, duration)
 
 	// Wait for completion
 	if err := cmd.Wait(); err != nil {
@@ -461,16 +461,15 @@ func splitOnCarriageReturnOrNewline(data []byte, atEOF bool) (advance int, token
 	return 0, nil, nil
 }
 
-// parseProgressBatch parses FFmpeg's stderr output for batch progress tracking
-func (c *Converter) parseProgressBatch(stderr io.ReadCloser, batchProgress *progress.BatchProgress, filename string, totalDuration float64) {
-	defer stderr.Close()
+// parseProgressBatch parses FFmpeg's stdout for batch progress tracking
+func (c *Converter) parseProgressBatch(stdout io.ReadCloser, batchProgress *progress.BatchProgress, filename string, totalDuration float64) {
+	defer stdout.Close()
 
 	// Use a custom split function that splits on \r or \n
-	// FFmpeg uses \r to update progress on the same line
-	scanner := bufio.NewScanner(stderr)
+	scanner := bufio.NewScanner(stdout)
 	scanner.Split(splitOnCarriageReturnOrNewline)
-	// Match "time=" from ffmpeg stats output (e.g., time=00:01:23.45)
-	timeRegex := regexp.MustCompile(`time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)`)
+	// Match "out_time=" from ffmpeg -progress output (e.g., out_time=00:01:23.456789)
+	timeRegex := regexp.MustCompile(`out_time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)`)
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -516,7 +515,7 @@ func (c *Converter) buildFFmpegArgs(inputPath, outputPath string) []string {
 	args := []string{
 		"-nostdin",           // Don't wait for stdin input
 		"-i", inputPath,
-		"-progress", "pipe:2", // Output machine-readable progress to stderr
+		"-progress", "pipe:1", // Output machine-readable progress to stdout
 	}
 
 	// Determine output format and set appropriate codecs
