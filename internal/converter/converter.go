@@ -425,12 +425,14 @@ func (c *Converter) parseProgress(stderr io.ReadCloser, bar *progress.ProgressBa
 	// FFmpeg uses \r to update progress on the same line
 	scanner := bufio.NewScanner(stderr)
 	scanner.Split(splitOnCarriageReturnOrNewline)
-	timeRegex := regexp.MustCompile(`time=(\d{2}):(\d{2}):(\d{2}\.\d{2})`)
+	// Match both "time=" (from -stats) and "out_time=" (from -progress pipe:2)
+	// Also handle variable decimal places (2-6 digits)
+	timeRegex := regexp.MustCompile(`(?:out_)?time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)`)
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Look for time= in the output
+		// Look for time= or out_time= in the output
 		matches := timeRegex.FindStringSubmatch(line)
 		if len(matches) == 4 {
 			// Parse HH:MM:SS.ss format
@@ -473,12 +475,14 @@ func (c *Converter) parseProgressBatch(stderr io.ReadCloser, batchProgress *prog
 	// FFmpeg uses \r to update progress on the same line
 	scanner := bufio.NewScanner(stderr)
 	scanner.Split(splitOnCarriageReturnOrNewline)
-	timeRegex := regexp.MustCompile(`time=(\d{2}):(\d{2}):(\d{2}\.\d{2})`)
+	// Match both "time=" (from -stats) and "out_time=" (from -progress pipe:2)
+	// Also handle variable decimal places (2-6 digits)
+	timeRegex := regexp.MustCompile(`(?:out_)?time=(\d{2}):(\d{2}):(\d{2}(?:\.\d+)?)`)
 
 	for scanner.Scan() {
 		line := scanner.Text()
 
-		// Look for time= in the output
+		// Look for time= or out_time= in the output
 		matches := timeRegex.FindStringSubmatch(line)
 		if len(matches) == 4 {
 			// Parse HH:MM:SS.ss format
