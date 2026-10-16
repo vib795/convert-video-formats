@@ -86,10 +86,16 @@ func GetOutputPath(inputPath string, opts *types.ConversionOptions) string {
 		return opts.OutputPath
 	}
 
-	// Generate default output path
+	// Default to the input name with the new extension, e.g. video.mov -> video.mp4
 	ext := filepath.Ext(inputPath)
 	base := strings.TrimSuffix(inputPath, ext)
-	return fmt.Sprintf("%s_converted.%s", base, opts.Format)
+	outputPath := fmt.Sprintf("%s.%s", base, opts.Format)
+
+	// Same format as the input: ffmpeg can't write over its own input, so keep a suffix
+	if strings.EqualFold(outputPath, inputPath) {
+		return fmt.Sprintf("%s_converted.%s", base, opts.Format)
+	}
+	return outputPath
 }
 
 // EnsureDirectoryExists creates a directory if it doesn't exist

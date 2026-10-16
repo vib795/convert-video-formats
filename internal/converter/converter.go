@@ -1,7 +1,9 @@
 package converter
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/vib795/convert-video-formats/internal/progress"
@@ -83,26 +86,20 @@ func (c *Converter) convertSingleFile(inputPath, outputPath string) error {
 		return c.convertWithSpinner(inputPath, outputPath)
 	}
 
-	// Get input file size for progress display
-	inputSize := c.getFileSize(inputPath)
-
 	// Start progress bar
 	bar := progress.NewProgressBar(fmt.Sprintf("Converting %s", filepath.Base(inputPath)))
 	bar.Start()
 
-	// Build ffmpeg command (simple, no progress flags)
-	args := c.buildFFmpegArgs(inputPath, outputPath)
-	cmd := exec.Command("ffmpeg", args...)
-
-	// Start the command
-	if err := cmd.Start(); err != nil {
+	// Start ffmpeg, tracking how much of the video it has encoded
+	cmd, encoded, err := c.startFFmpegWithProgress(inputPath, outputPath)
+	if err != nil {
 		bar.Stop()
 		return fmt.Errorf("failed to start ffmpeg: %w", err)
 	}
 
-	// Monitor output file size in background
+	// Monitor encoding progress in background
 	stopProgress := make(chan bool)
-	go c.monitorOutputProgress(outputPath, bar, duration, inputSize, stopProgress)
+	go c.monitorOutputProgress(outputPath, bar, duration, encoded, stopProgress)
 
 	// Wait for completion
 	if err := cmd.Wait(); err != nil {
@@ -280,23 +277,17 @@ func (c *Converter) convertFileWorkerWithBatchProgress(inputPath, outputDir stri
 		return result
 	}
 
-	// Get input file size for progress display
-	inputSize := c.getFileSize(inputPath)
-
-	// Build ffmpeg command
-	args := c.buildFFmpegArgs(inputPath, outputPath)
-	cmd := exec.Command("ffmpeg", args...)
-
-	// Start the command
-	if err := cmd.Start(); err != nil {
+	// Start ffmpeg, tracking how much of the video it has encoded
+	cmd, encoded, err := c.startFFmpegWithProgress(inputPath, outputPath)
+	if err != nil {
 		result.Error = fmt.Errorf("failed to start ffmpeg: %w", err)
 		batchProgress.CompleteFile(baseName, false)
 		return result
 	}
 
-	// Monitor output file size for progress
+	// Monitor encoding progress
 	stopProgress := make(chan bool)
-	go c.monitorBatchProgress(outputPath, batchProgress, baseName, duration, inputSize, stopProgress)
+	go c.monitorBatchProgress(outputPath, batchProgress, baseName, duration, encoded, stopProgress)
 
 	// Wait for completion
 	if err := cmd.Wait(); err != nil {
@@ -348,27 +339,21 @@ func (c *Converter) convertFileWorker(inputPath, outputDir string) types.Convers
 		return c.convertFileWorkerWithSpinner(inputPath, outputPath, baseName)
 	}
 
-	// Get input file size for progress display
-	inputSize := c.getFileSize(inputPath)
-
 	// Start progress bar
 	bar := progress.NewProgressBar(fmt.Sprintf("Converting %s", baseName))
 	bar.Start()
 
-	// Build ffmpeg command
-	args := c.buildFFmpegArgs(inputPath, outputPath)
-	cmd := exec.Command("ffmpeg", args...)
-
-	// Start the command
-	if err := cmd.Start(); err != nil {
+	// Start ffmpeg, tracking how much of the video it has encoded
+	cmd, encoded, err := c.startFFmpegWithProgress(inputPath, outputPath)
+	if err != nil {
 		bar.Stop()
 		result.Error = fmt.Errorf("failed to start ffmpeg: %w", err)
 		return result
 	}
 
-	// Monitor output file size for progress
+	// Monitor encoding progress
 	stopProgress := make(chan bool)
-	go c.monitorOutputProgress(outputPath, bar, duration, inputSize, stopProgress)
+	go c.monitorOutputProgress(outputPath, bar, duration, encoded, stopProgress)
 
 	// Wait for completion
 	if err := cmd.Wait(); err != nil {
@@ -432,8 +417,8 @@ func (c *Converter) getVideoDuration(inputPath string) (float64, error) {
 	return duration, nil
 }
 
-// monitorBatchProgress monitors output file size for batch progress tracking
-func (c *Converter) monitorBatchProgress(outputPath string, batchProgress *progress.BatchProgress, filename string, totalDuration float64, inputSize int64, stop chan bool) {
+// monitorBatchProgress reports encoding progress for batch progress tracking
+func (c *Converter) monitorBatchProgress(outputPath string, batchProgress *progress.BatchProgress, filename string, totalDuration float64, encoded *atomic.Int64, stop chan bool) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -446,7 +431,7 @@ func (c *Converter) monitorBatchProgress(outputPath string, batchProgress *progr
 		case <-ticker.C:
 			elapsed := time.Since(startTime)
 			fileSize := c.getFileSize(outputPath)
-			batchProgress.UpdateFileWithSize(filename, elapsed, fileSize, inputSize, totalDuration)
+			batchProgress.UpdateFileWithSize(filename, elapsed, fileSize, encodedSeconds(encoded), totalDuration)
 		}
 	}
 }
@@ -476,6 +461,8 @@ func (c *Converter) buildFFmpegArgs(inputPath, outputPath string) []string {
 	args := []string{
 		"-nostdin", // Don't wait for stdin input
 		"-i", inputPath,
+		"-progress", "pipe:1", // Machine-readable progress on stdout
+		"-nostats",
 	}
 
 	// Determine output format and set appropriate codecs
@@ -530,9 +517,8 @@ func (c *Converter) buildFFmpegArgs(inputPath, outputPath string) []string {
 	return args
 }
 
-// monitorOutputProgress monitors conversion by showing elapsed time and file size
-// This is reliable because file size can always be read, unlike duration for partial MP4s
-func (c *Converter) monitorOutputProgress(outputPath string, bar *progress.ProgressBar, totalDuration float64, inputSize int64, stop chan bool) {
+// monitorOutputProgress reports elapsed time, output size, and encoded position
+func (c *Converter) monitorOutputProgress(outputPath string, bar *progress.ProgressBar, totalDuration float64, encoded *atomic.Int64, stop chan bool) {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -545,7 +531,7 @@ func (c *Converter) monitorOutputProgress(outputPath string, bar *progress.Progr
 		case <-ticker.C:
 			elapsed := time.Since(startTime)
 			fileSize := c.getFileSize(outputPath)
-			bar.UpdateWithElapsedAndSize(elapsed, fileSize, inputSize, totalDuration)
+			bar.UpdateWithElapsedAndSize(elapsed, fileSize, encodedSeconds(encoded), totalDuration)
 		}
 	}
 }
@@ -557,4 +543,39 @@ func (c *Converter) getFileSize(path string) int64 {
 		return 0
 	}
 	return info.Size()
+}
+
+// startFFmpegWithProgress starts ffmpeg and tracks the encoded position (in
+// microseconds) from its -progress output. This is the actual progress through
+// the video, unlike output file size, which depends on codec and quality.
+func (c *Converter) startFFmpegWithProgress(inputPath, outputPath string) (*exec.Cmd, *atomic.Int64, error) {
+	cmd := exec.Command("ffmpeg", c.buildFFmpegArgs(inputPath, outputPath)...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, nil, err
+	}
+
+	encoded := &atomic.Int64{}
+	go trackEncodedTime(stdout, encoded)
+	return cmd, encoded, nil
+}
+
+// trackEncodedTime parses out_time_us lines from ffmpeg's -progress output
+func trackEncodedTime(r io.Reader, encoded *atomic.Int64) {
+	scanner := bufio.NewScanner(r)
+	for scanner.Scan() {
+		if v, ok := strings.CutPrefix(scanner.Text(), "out_time_us="); ok {
+			if us, err := strconv.ParseInt(v, 10, 64); err == nil && us > 0 {
+				encoded.Store(us)
+			}
+		}
+	}
+}
+
+// encodedSeconds returns the encoded position in seconds
+func encodedSeconds(encoded *atomic.Int64) float64 {
+	return float64(encoded.Load()) / 1e6
 }
